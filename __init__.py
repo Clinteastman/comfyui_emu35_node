@@ -42,6 +42,7 @@ if str(_REPO_ROOT) not in sys.path:
 from src.utils.model_utils import build_emu3p5
 from src.emu3p5 import Emu3ForCausalLM, Emu3Config
 from src.utils.generation_utils import generate, multimodal_decode
+from src.utils.input_utils import build_image
 from src.tokenizer_emu3_ibq.tokenization_emu3 import Emu3Tokenizer
 
 # For optional reference-image support in future
@@ -182,6 +183,20 @@ def _build_cfg(
     )
     # special tokens map filled after tokenizer is built
     return cfg
+
+
+def _comfy_image_to_pil(image_tensor: torch.Tensor) -> Image.Image:
+    if image_tensor.ndim == 4:
+        image_tensor = image_tensor[0]
+    image_tensor = image_tensor.detach().cpu().clamp(0.0, 1.0)
+    arr = (image_tensor.numpy() * 255.0)
+    import numpy as np
+    if arr.ndim == 2:
+        arr = np.repeat(arr[:, :, None], 3, axis=2)
+    elif arr.shape[2] == 1:
+        arr = np.repeat(arr, 3, axis=2)
+    arr = arr.round().astype("uint8")
+    return Image.fromarray(arr)
 
 
 # ---------------------------
@@ -450,12 +465,122 @@ class Emu35_T2I:
         return (out,)
 
 
+class Emu35_I2I:
+    CATEGORY = "emu3.5"
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "run"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "emu35_model": ("EMU35_MODEL",),
+                "reference_image": ("IMAGE",),
+                "prompt": ("STRING", {"multiline": True, "default": "Refine the reference scene with extra clay astronaut details."}),
+                "num_images": ("INT", {"default": 1, "min": 1, "max": 32}),
+                "base_seed": ("INT", {"default": 123456789, "min": 0, "max": 2**31 - 1}),
+                "guidance": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 20.0, "step": 0.1}),
+                "unconditional_type": ("STRING", {"default": "no_text_img_cfg", "choices": ["no_text", "no_text_img_cfg"]}),
+                "image_cfg_scale": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 10.0, "step": 0.1}),
+                "max_new_tokens": ("INT", {"default": 32768, "min": 1, "max": 262144}),
+                "use_differential_sampling": ("BOOLEAN", {"default": True}),
+                "text_top_k": ("INT", {"default": 1024, "min": 0, "max": 200000}),
+                "text_top_p": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "text_temperature": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 10.0, "step": 0.01}),
+                "image_top_k": ("INT", {"default": 10240, "min": 0, "max": 200000}),
+                "image_top_p": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "image_temperature": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 10.0, "step": 0.01}),
+                "image_area": ("INT", {"default": 518400, "min": 65536, "max": 1048576, "step": 256}),
+            },
+        }
+
+    def run(
+        self,
+        emu35_model: Tuple[Any, Any, Any, Dict[str, int]],
+        reference_image: torch.Tensor,
+        prompt: str,
+        num_images: int,
+        base_seed: int,
+        guidance: float,
+        unconditional_type: str,
+        image_cfg_scale: float,
+        max_new_tokens: int,
+        use_differential_sampling: bool,
+        text_top_k: int,
+        text_top_p: float,
+        text_temperature: float,
+        image_top_k: int,
+        image_top_p: float,
+        image_temperature: float,
+        image_area: int,
+    ):
+        model, tokenizer, vq_model, special_tokens_map = emu35_model
+
+        cfg = _build_cfg(
+            guidance=guidance,
+            unconditional_type=unconditional_type,
+            image_cfg_scale=image_cfg_scale,
+            text_top_k=text_top_k,
+            text_top_p=text_top_p,
+            text_temperature=text_temperature,
+            image_top_k=image_top_k,
+            image_top_p=image_top_p,
+            image_temperature=image_temperature,
+            max_new_tokens=max_new_tokens,
+            use_differential_sampling=use_differential_sampling,
+        )
+        cfg.special_token_ids = special_tokens_map
+        cfg.image_area = int(image_area)
+
+        unc_template, cond_template = _build_prompts(prompt, with_image=True)
+        ref_pil = _comfy_image_to_pil(reference_image)
+        image_token_str = build_image(ref_pil, cfg, tokenizer, vq_model)
+        cond_prompt = cond_template.replace("<|IMAGE|>", image_token_str)
+        unc_prompt = unc_template.replace("<|IMAGE|>", image_token_str)
+
+        images: List[torch.Tensor] = []
+        device = model.device if hasattr(model, "device") else (next(model.parameters()).device)
+
+        for i in range(int(num_images)):
+            Emu35_T2I._seed_all(self, int(base_seed) + i)
+
+            input_ids = tokenizer.encode(cond_prompt, return_tensors="pt", add_special_tokens=False).to(device)
+            if input_ids[0, 0] != cfg.special_token_ids["BOS"]:
+                BOS = torch.Tensor([[cfg.special_token_ids["BOS"]]], device=input_ids.device, dtype=input_ids.dtype)
+                input_ids = torch.cat([BOS, input_ids], dim=1)
+
+            unconditional_ids = tokenizer.encode(unc_prompt, return_tensors="pt", add_special_tokens=False).to(device)
+            full_unc_ids = None
+
+            for result in generate(cfg, model, tokenizer, input_ids, unconditional_ids, full_unc_ids):
+                result_str = tokenizer.decode(result, skip_special_tokens=False)
+                mm_out = multimodal_decode(result_str, tokenizer, vq_model)
+                img_pil = None
+                for (typ, payload) in mm_out:
+                    if typ == "image":
+                        img_pil = payload
+                        break
+                if img_pil is None:
+                    img_pil = Image.new("RGB", ref_pil.size, color=(0, 0, 0))
+
+                import numpy as np
+
+                arr = np.array(img_pil).astype("float32") / 255.0
+                t = torch.from_numpy(arr)[None, ...]
+                images.append(t)
+
+        out = torch.cat(images, dim=0) if len(images) > 1 else images[0]
+        return (out,)
+
+
 NODE_CLASS_MAPPINGS = {
     "Emu3.5 Load (fp16)": Emu35_Load,
     "Emu3.5 T2I (Batch)": Emu35_T2I,
+    "Emu3.5 I2I (Batch)": Emu35_I2I,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "Emu3.5 Load (fp16)": "Emu3.5 Load (fp16)",
     "Emu3.5 T2I (Batch)": "Emu3.5 T2I (Batch)",
+    "Emu3.5 I2I (Batch)": "Emu3.5 I2I (Batch)",
 }

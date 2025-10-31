@@ -8,6 +8,8 @@ This repository is under active development and is not ready for general use. AP
 
 Text-to-Image ComfyUI node for BAAI Emu3.5.
 
+> Based on [baaivision/Emu3.5](https://github.com/baaivision/Emu3.5).
+
 ## Features
 
 - Auto-download Hugging Face repos to ComfyUI models folder:
@@ -16,6 +18,7 @@ Text-to-Image ComfyUI node for BAAI Emu3.5.
 - CUDA fp16 by default; default device `cuda:0`.
 - Optional offload via `device_map="auto"` toggle.
 - Sequential batching with `base_seed + index`.
+- Prompt-conditioned image-to-image node that reuses reference frames via Emu3.5's VQ tokenizer.
 
 ## Default behavior
 
@@ -43,10 +46,13 @@ Copy-Item -Recurse -Force .\comfyui_emu35_node "C:\path\to\ComfyUI\custom_nodes\
 ## Usage
 
 1. Copy or symlink `comfyui_emu35_node/` into your `%COMFYUI_ROOT%/custom_nodes/`.
-2. Launch ComfyUI. Look under the "emu3.5" category for:
-   - "Emu3.5 Load (fp16)"
-   - "Emu3.5 T2I (Batch)"
-3. On first run, the node will download the selected model(s) into `%COMFYUI_ROOT%/models/Emu3.5/`.
+1. Launch ComfyUI. Look under the "emu3.5" category for:
+
+    - "Emu3.5 Load (fp16)"
+    - "Emu3.5 T2I (Batch)"
+    - "Emu3.5 I2I (Batch)"
+
+1. On first run, the node will download the selected model(s) into `%COMFYUI_ROOT%/models/Emu3.5/`.
 
 ### Quick start workflow
 
@@ -84,6 +90,12 @@ That workflow:
     - Text: `text_top_k`, `text_top_p`, `text_temperature`
     - Image: `image_top_k`, `image_top_p`, `image_temperature`
   - Not applicable: negative prompts, steps/samplers (this is an AR model, not diffusion).
+
+- Emu3.5 I2I (Batch)
+  - `reference_image`: ComfyUI image input (first batch frame is used).
+  - `prompt`: guidance text applied alongside the reference frame.
+  - `image_area`: target pixel area for VQ encoding (default 720×720); larger values preserve detail but cost VRAM.
+  - Shares the remaining controls with the T2I node; defaults skew toward `no_text_img_cfg` guidance (5.0 CFG, 1.5 image CFG).
 
 ## Environment overrides
 
