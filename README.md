@@ -1,5 +1,11 @@
 # Emu3.5 ComfyUI Node (in-repo)
 
+> 🚧 WIP — DO NOT USE
+
+This repository is under active development and is not ready for general use. APIs, behavior, and files may change without notice.
+
+---
+
 Text-to-Image ComfyUI node for BAAI Emu3.5, developed inside this repository first. Move the `comfyui_emu35_node/` folder to `ComfyUI/custom_nodes/` later to use in ComfyUI.
 
 ## Features
@@ -7,14 +13,14 @@ Text-to-Image ComfyUI node for BAAI Emu3.5, developed inside this repository fir
 - Auto-download Hugging Face repos to ComfyUI models folder:
   - `BAAI/Emu3.5` (default) or `BAAI/Emu3.5-Image`
   - `BAAI/Emu3.5-VisionTokenizer`
-- CUDA fp16 by default; default device `cuda:9` with fallback to `cuda:0`.
+- CUDA fp16 by default; default device `cuda:0`.
 - Optional offload via `device_map="auto"` toggle.
 - Sequential batching with `base_seed + index`.
 
 ## Default behavior
 
 - Model: `BAAI/Emu3.5` by default (you can switch to `BAAI/Emu3.5-Image`).
-- Device: `cuda:9` by default. If that GPU index isn’t available, the loader falls back to `cuda:0` automatically.
+- Device: `cuda:0` by default.
 - Precision: fp16 by default (bf16 optional). If flash-attn isn’t available on Windows, the node falls back to SDPA attention automatically.
 - Offload: visible toggle that sets `device_map="auto"` for HF accelerate offload when VRAM is tight.
 
@@ -53,7 +59,7 @@ You can import a ready-made workflow graph:
 
 That workflow:
 
-- Loads `BAAI/Emu3.5` on `cuda:9` (fallback `cuda:0`), fp16; offload disabled by default
+- Loads `BAAI/Emu3.5` on `cuda:0`, fp16; offload disabled by default
 - Runs “Emu3.5 T2I (Batch)” with a sample prompt, batch=1, guidance=2.0, and default sampling knobs
 - Saves the image using the standard `SaveImage` node
 
@@ -62,7 +68,7 @@ That workflow:
 - Emu3.5 Load (fp16)
   - `model_repo`: string; default `BAAI/Emu3.5` (you can switch to `BAAI/Emu3.5-Image`).
   - `precision`: `fp16` (default) or `bf16`.
-  - `device`: string; default `cuda:9` (falls back to `cuda:0` if index 9 is missing).
+  - `device`: string; default `cuda:0`.
   - `offload`: boolean; when true, uses `device_map="auto"` offload.
   - `attn_backend`: `auto` (default), `flash_attn`, or `sdpa`. `auto` tries flash-attn, falls back to SDPA.
 
@@ -104,7 +110,7 @@ That workflow:
 
 - Missing dependency: if `huggingface_hub` is not installed, run the install commands in “Install deps”.
 - Flash-attn issues on Windows: select `attn_backend=sdpa` in the loader or keep `auto` (it falls back to SDPA automatically).
-- Device not found: if `cuda:9` isn’t available, the loader will use `cuda:0`. You can set `device` explicitly.
+- Device not found: if the requested CUDA device index isn’t available, the loader will use `cuda:0`. You can set `device` explicitly.
 - OOM on large GPUs: enable `offload` (device_map=auto), reduce `num_images` to 1, reduce `max_new_tokens`, or use the base `Emu3.5` model instead of `Emu3.5-Image`.
 
 ## Roadmap (optional)

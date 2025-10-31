@@ -16,7 +16,7 @@
       "widgets_values": {
         "model_repo": "BAAI/Emu3.5",
         "precision": "fp16",
-        "device": "cuda:9",
+        "device": "cuda:0",
         "offload": false,
         "attn_backend": "auto"
       }

@@ -3,7 +3,7 @@ ComfyUI custom node for Emu3.5 (Text-to-Image first).
 
 Features
 - Auto-downloads models from Hugging Face into ComfyUI/models.
-- CUDA fp16 by default; device default "cuda:9" with fallback to "cuda:0".
+- CUDA fp16 by default; device default "cuda:0" (out-of-range CUDA indices resolve to "cuda:0").
 - Optional offload via device_map="auto" toggle.
 - Sequential batching with base_seed + index.
 
@@ -202,7 +202,7 @@ class Emu35_Load:
             "required": {
                 "model_repo": ("STRING", {"default": HF_DEFAULT_MODEL}),
                 "precision": ("STRING", {"default": "fp16", "choices": ["fp16", "bf16"]}),
-                "device": ("STRING", {"default": "cuda:9"}),
+                "device": ("STRING", {"default": "cuda:0"}),
                 "offload": ("BOOLEAN", {"default": False, "label": "device_map='auto'"}),
                 "attn_backend": ("STRING", {"default": "auto", "choices": ["auto", "flash_attn", "sdpa"]}),
             }
