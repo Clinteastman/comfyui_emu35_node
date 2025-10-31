@@ -35,9 +35,11 @@ except Exception:
 
 # Ensure repo root is on sys.path so we can import from ./src
 _THIS_FILE = Path(__file__).resolve()
-_REPO_ROOT = _THIS_FILE.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_PACKAGE_ROOT = _THIS_FILE.parent
+_REPO_ROOT = _PACKAGE_ROOT
+
+if str(_PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PACKAGE_ROOT))
 
 
 def _ensure_emu3_src_available() -> None:
@@ -53,9 +55,17 @@ def _ensure_emu3_src_available() -> None:
     if _has_src_module():
         return
 
-    local_src = _REPO_ROOT / "src"
+    local_src = _PACKAGE_ROOT / "src"
     if local_src.exists():
-        repo_path = local_src.parent
+        repo_path = local_src
+        if str(repo_path) not in sys.path:
+            sys.path.insert(0, str(repo_path))
+        if _has_src_module():
+            return
+
+    repo_src = _PACKAGE_ROOT.parent / "src"
+    if repo_src.exists():
+        repo_path = repo_src
         if str(repo_path) not in sys.path:
             sys.path.insert(0, str(repo_path))
         if _has_src_module():
@@ -65,7 +75,7 @@ def _ensure_emu3_src_available() -> None:
     vendor_root.mkdir(parents=True, exist_ok=True)
 
     for candidate in vendor_root.glob("Emu3.5-*/src"):
-        repo_path = candidate.parent
+        repo_path = candidate
         if str(repo_path) not in sys.path:
             sys.path.insert(0, str(repo_path))
         if _has_src_module():
@@ -92,7 +102,7 @@ def _ensure_emu3_src_available() -> None:
             continue
 
         for candidate in vendor_root.glob("Emu3.5-*/src"):
-            repo_path = candidate.parent
+            repo_path = candidate
             if str(repo_path) not in sys.path:
                 sys.path.insert(0, str(repo_path))
             if _has_src_module():

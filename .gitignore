@@ -1,0 +1,25 @@
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Vendored upstream snapshot
+_vendor/
+
+# Downloaded model weights and caches
+models/
+*.ckpt
+*.pt
+*.bin
+*.safetensors
+.huggingface/
+
+# Test artefacts
+.pytest_cache/
+.mypy_cache/
