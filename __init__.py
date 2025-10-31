@@ -46,6 +46,19 @@ def _ensure_on_path(path: Path) -> None:
 _ensure_on_path(_PACKAGE_ROOT)
 
 
+def _is_allocation_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    if isinstance(exc, torch.cuda.OutOfMemoryError):
+        return True
+    if "out of memory" in msg:
+        return True
+    if "allocation on device" in msg:
+        return True
+    if "cuda" in msg and "allocation" in msg:
+        return True
+    return False
+
+
 def _ensure_emu3_src_available() -> None:
     """Make sure the Emu3.5 src tree is importable."""
 
@@ -326,11 +339,6 @@ class Emu35_Load:
         model_dir = _ensure_hf_repo(model_repo, models_root)
         vq_dir = _ensure_hf_repo(HF_VQ_REPO, models_root)
 
-        # Cache key
-        key = (str(model_dir), device_resolved, precision, attn_backend, bool(offload))
-        if key in _MODEL_CACHE:
-            return (_MODEL_CACHE[key],)
-
         # Determine dtype
         torch_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
@@ -344,61 +352,123 @@ class Emu35_Load:
             except Exception:
                 attn_choice = "sdpa"
 
-        # Build model/tokenizer/vq
-        model_device = "auto" if offload else device_resolved
-        try:
-            model, tokenizer, vq_model = build_emu3p5(
-                str(model_dir),
-                str(_REPO_ROOT / "src" / "tokenizer_emu3_ibq"),
-                str(vq_dir),
-                vq_type="ibq",
-                model_device=model_device,
-                vq_device=device_resolved if device_resolved.startswith("cuda") else "cpu",
-            )
-        except Exception as e:
-            # Fallback: manual load with SDPA attention if flash_attn path failed
-            if attn_choice == "sdpa":
-                try:
-                    model_config = Emu3Config.from_pretrained(str(model_dir), trust_remote_code=True)
-                    model = Emu3ForCausalLM.from_pretrained(
-                        str(model_dir),
-                        config=model_config,
-                        torch_dtype=torch_dtype,
-                        device_map=model_device,
-                        attn_implementation="sdpa",
-                        trust_remote_code=True,
-                    )
-                    model.eval()
-                    # Load tokenizer and vq tokenizer akin to build_emu3p5
-                    tokenizer = Emu3Tokenizer.from_pretrained(
-                        str(_REPO_ROOT / "src" / "tokenizer_emu3_ibq"),
-                        special_tokens_file=str(_REPO_ROOT / "src" / "tokenizer_emu3_ibq" / "emu3_vision_tokens.txt"),
-                        trust_remote_code=True,
-                    )
-                    # Set special tokens as build_emu3p5 does
-                    tokenizer.bos_token = "<|extra_203|>"
-                    tokenizer.eos_token = "<|extra_204|>"
-                    tokenizer.pad_token = "<|endoftext|>"
-                    tokenizer.eol_token = "<|extra_200|>"
-                    tokenizer.eof_token = "<|extra_201|>"
-                    tokenizer.tms_token = "<|extra_202|>"
-                    tokenizer.img_token = "<|image token|>"
-                    tokenizer.boi_token = "<|image start|>"
-                    tokenizer.eoi_token = "<|image end|>"
-                    tokenizer.bss_token = "<|extra_100|>"
-                    tokenizer.ess_token = "<|extra_101|>"
-                    tokenizer.bog_token = "<|extra_60|>"
-                    tokenizer.eog_token = "<|extra_61|>"
-                    tokenizer.boc_token = "<|extra_50|>"
-                    tokenizer.eoc_token = "<|extra_51|>"
+        preferred_model_device = "auto" if offload else device_resolved
+        preferred_vq_device = device_resolved if device_resolved.startswith("cuda") else "cpu"
 
-                    # Vision tokenizer via build_vision_tokenizer
-                    from src.vision_tokenizer import build_vision_tokenizer as _bvt
-                    vq_model = _bvt("ibq", str(vq_dir), device=(device_resolved if device_resolved.startswith("cuda") else "cpu"))
-                except Exception as e2:
-                    raise RuntimeError(f"Failed to load Emu3.5 model with SDPA fallback: {e2}") from e
-            else:
-                raise RuntimeError(f"Failed to load Emu3.5 model from {model_dir}: {e}") from e
+        attempt_order: List[Tuple[str, str]] = []
+        seen_attempts = set()
+
+        def _add_attempt(model_device_attempt: str, vq_device_attempt: str) -> None:
+            key = (model_device_attempt, vq_device_attempt)
+            if key not in seen_attempts:
+            seen_attempts.add(key)
+                attempt_order.append(key)
+
+        _add_attempt(preferred_model_device, preferred_vq_device)
+        if preferred_model_device != "auto" and device_resolved.startswith("cuda"):
+            _add_attempt("auto", preferred_vq_device)
+
+        def _make_cache_key(model_device_key: str) -> Tuple[str, str, str, str]:
+            return (str(model_dir), model_device_key, precision, attn_choice)
+
+        last_allocation_error: Optional[Exception] = None
+        loaded_tuple: Optional[Tuple[Any, Any, Any]] = None
+        effective_model_device = preferred_model_device
+        cache_key_success: Optional[Tuple[str, str, str, str]] = None
+
+        def _attempt_load(model_device_attempt: str, vq_device_attempt: str) -> Tuple[Any, Any, Any]:
+            try:
+                return build_emu3p5(
+                    str(model_dir),
+                    str(_REPO_ROOT / "src" / "tokenizer_emu3_ibq"),
+                    str(vq_dir),
+                    vq_type="ibq",
+                    model_device=model_device_attempt,
+                    vq_device=vq_device_attempt,
+                )
+            except Exception as exc:
+                if _is_allocation_error(exc):
+                    raise
+                if attn_choice == "sdpa":
+                    try:
+                        model_config = Emu3Config.from_pretrained(str(model_dir), trust_remote_code=True)
+                        model = Emu3ForCausalLM.from_pretrained(
+                            str(model_dir),
+                            config=model_config,
+                            torch_dtype=torch_dtype,
+                            device_map=model_device_attempt,
+                            attn_implementation="sdpa",
+                            trust_remote_code=True,
+                        )
+                        model.eval()
+                        tokenizer_loaded = Emu3Tokenizer.from_pretrained(
+                            str(_REPO_ROOT / "src" / "tokenizer_emu3_ibq"),
+                            special_tokens_file=str(_REPO_ROOT / "src" / "tokenizer_emu3_ibq" / "emu3_vision_tokens.txt"),
+                            trust_remote_code=True,
+                        )
+                        tokenizer_loaded.bos_token = "<|extra_203|>"
+                        tokenizer_loaded.eos_token = "<|extra_204|>"
+                        tokenizer_loaded.pad_token = "<|endoftext|>"
+                        tokenizer_loaded.eol_token = "<|extra_200|>"
+                        tokenizer_loaded.eof_token = "<|extra_201|>"
+                        tokenizer_loaded.tms_token = "<|extra_202|>"
+                        tokenizer_loaded.img_token = "<|image token|>"
+                        tokenizer_loaded.boi_token = "<|image start|>"
+                        tokenizer_loaded.eoi_token = "<|image end|>"
+                        tokenizer_loaded.bss_token = "<|extra_100|>"
+                        tokenizer_loaded.ess_token = "<|extra_101|>"
+                        tokenizer_loaded.bog_token = "<|extra_60|>"
+                        tokenizer_loaded.eog_token = "<|extra_61|>"
+                        tokenizer_loaded.boc_token = "<|extra_50|>"
+                        tokenizer_loaded.eoc_token = "<|extra_51|>"
+
+                        from src.vision_tokenizer import build_vision_tokenizer as _bvt
+
+                        vq_model_loaded = _bvt("ibq", str(vq_dir), device=vq_device_attempt)
+                        return model, tokenizer_loaded, vq_model_loaded
+                    except Exception as inner_exc:
+                        if _is_allocation_error(inner_exc):
+                            raise inner_exc
+                        raise RuntimeError(f"Failed to load Emu3.5 model with SDPA fallback: {inner_exc}") from exc
+                raise
+
+        for model_device_attempt, vq_device_attempt in attempt_order:
+            cache_key = _make_cache_key(model_device_attempt)
+            if cache_key in _MODEL_CACHE:
+                return (_MODEL_CACHE[cache_key],)
+
+            try:
+                model, tokenizer, vq_model = _attempt_load(model_device_attempt, vq_device_attempt)
+                loaded_tuple = (model, tokenizer, vq_model)
+                effective_model_device = model_device_attempt
+                cache_key_success = cache_key
+                break
+            except Exception as exc:
+                if _is_allocation_error(exc):
+                    last_allocation_error = exc
+                    if torch.cuda.is_available():
+                        try:
+                            torch.cuda.empty_cache()
+                        except Exception:
+                            pass
+                    if model_device_attempt != "auto" and any(a[0] == "auto" for a in attempt_order):
+                        print(
+                            "[Emu3.5 Load] Out of memory on device "
+                            f"'{model_device_attempt}'. Retrying with device_map='auto'."
+                        )
+                    continue
+                raise RuntimeError(f"Failed to load Emu3.5 model from {model_dir} ({model_device_attempt}): {exc}") from exc
+
+        if loaded_tuple is None or cache_key_success is None:
+            hint = (
+                "Enable the offload toggle or lower precision to fp16. "
+                "You can also pre-load the model with device_map='auto' using the loader's Offload option."
+            )
+            raise RuntimeError(
+                f"Failed to load Emu3.5 model from {model_dir} due to insufficient device memory. {hint}"
+            ) from last_allocation_error
+
+        model, tokenizer, vq_model = loaded_tuple
 
         # Adjust dtype/attention after load when build_emu3p5 doesn't expose knobs
         try:
@@ -421,7 +491,7 @@ class Emu35_Load:
             special_tokens_map[k] = tokenizer.encode(v)[0]
 
         handle = (model, tokenizer, vq_model, special_tokens_map)
-        _MODEL_CACHE[key] = handle
+        _MODEL_CACHE[cache_key_success] = handle
         return (handle,)
 
 
