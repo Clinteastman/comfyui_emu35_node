@@ -6,7 +6,7 @@ This repository is under active development and is not ready for general use. AP
 
 ---
 
-Text-to-Image ComfyUI node for BAAI Emu3.5, developed inside this repository first. Move the `comfyui_emu35_node/` folder to `ComfyUI/custom_nodes/` later to use in ComfyUI.
+Text-to-Image ComfyUI node for BAAI Emu3.5.
 
 ## Features
 
