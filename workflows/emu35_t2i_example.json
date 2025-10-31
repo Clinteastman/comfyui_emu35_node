@@ -1,0 +1,78 @@
+{
+  "last_node_id": 3,
+  "last_link_id": 2,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Emu3.5 Load (fp16)",
+      "pos": [50, 80],
+      "flags": {},
+      "order": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "EMU35_MODEL", "type": "EMU35_MODEL", "links": [1]}
+      ],
+      "properties": {"Node name for S&R": "Emu3.5 Load (fp16)"},
+      "widgets_values": {
+        "model_repo": "BAAI/Emu3.5",
+        "precision": "fp16",
+        "device": "cuda:9",
+        "offload": false,
+        "attn_backend": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "Emu3.5 T2I (Batch)",
+      "pos": [380, 80],
+      "flags": {},
+      "order": 1,
+      "inputs": [
+        {"name": "emu35_model", "type": "EMU35_MODEL", "link": 1}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [2]}
+      ],
+      "properties": {"Node name for S&R": "Emu3.5 T2I (Batch)"},
+      "widgets_values": {
+        "prompt": "A clay astronaut on Mars, cinematic lighting.",
+        "num_images": 1,
+        "base_seed": 123456789,
+        "guidance": 2.0,
+        "unconditional_type": "no_text",
+        "image_cfg_scale": 1.0,
+        "max_new_tokens": 32768,
+        "use_differential_sampling": true,
+        "text_top_k": 1024,
+        "text_top_p": 0.9,
+        "text_temperature": 1.0,
+        "image_top_k": 10240,
+        "image_top_p": 1.0,
+        "image_temperature": 1.0
+      }
+    },
+    {
+      "id": 3,
+      "type": "SaveImage",
+      "pos": [720, 90],
+      "flags": {},
+      "order": 2,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 2}
+      ],
+      "outputs": [],
+      "properties": {"Node name for S&R": "SaveImage"},
+      "widgets_values": [
+        "Emu35"
+      ]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "EMU35_MODEL"],
+    [2, 2, 0, 3, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
