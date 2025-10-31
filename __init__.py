@@ -19,6 +19,7 @@ import os
 import sys
 import math
 import types
+import importlib.util
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional, List
 
@@ -37,6 +38,72 @@ _THIS_FILE = Path(__file__).resolve()
 _REPO_ROOT = _THIS_FILE.parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+
+def _ensure_emu3_src_available() -> None:
+    """Make sure the Emu3.5 src tree is importable."""
+
+    def _has_src_module() -> bool:
+        spec = importlib.util.find_spec("src.utils.model_utils")
+        return spec is not None
+
+    if _has_src_module():
+        return
+
+    local_src = _REPO_ROOT / "src"
+    if local_src.exists():
+        repo_path = local_src.parent
+        if str(repo_path) not in sys.path:
+            sys.path.insert(0, str(repo_path))
+        if _has_src_module():
+            return
+
+    vendor_root = _REPO_ROOT / "_vendor"
+    vendor_root.mkdir(parents=True, exist_ok=True)
+
+    for candidate in vendor_root.glob("Emu3.5-*/src"):
+        repo_path = candidate.parent
+        if str(repo_path) not in sys.path:
+            sys.path.insert(0, str(repo_path))
+        if _has_src_module():
+            return
+
+    download_errors: List[str] = []
+    urls = [
+        "https://codeload.github.com/baaivision/Emu3.5/zip/refs/heads/main",
+        "https://codeload.github.com/baaivision/Emu3.5/zip/refs/heads/master",
+    ]
+
+    for url in urls:
+        try:
+            import urllib.request
+            from io import BytesIO
+            import zipfile
+
+            with urllib.request.urlopen(url) as response:
+                archive = BytesIO(response.read())
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(vendor_root)
+        except Exception as exc:  # noqa: PERF203
+            download_errors.append(f"{url}: {exc}")
+            continue
+
+        for candidate in vendor_root.glob("Emu3.5-*/src"):
+            repo_path = candidate.parent
+            if str(repo_path) not in sys.path:
+                sys.path.insert(0, str(repo_path))
+            if _has_src_module():
+                return
+
+    joined_errors = "\n".join(download_errors) if download_errors else "unknown"
+    raise ModuleNotFoundError(
+        "Unable to import Emu3.5 src package. "
+        "Download the Emu3.5 repository into this node folder and ensure its 'src' directory is present. "
+        f"Attempted automated download but failed: {joined_errors}"
+    )
+
+
+_ensure_emu3_src_available()
 
 # Local imports from this repo
 from src.utils.model_utils import build_emu3p5
