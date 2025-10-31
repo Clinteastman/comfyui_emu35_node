@@ -35,7 +35,7 @@ except Exception:
 
 # Ensure repo root is on sys.path so we can import from ./src
 _THIS_FILE = Path(__file__).resolve()
-_REPO_ROOT = _THIS_FILE.parents[1]
+_REPO_ROOT = _THIS_FILE.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -44,7 +44,10 @@ def _ensure_emu3_src_available() -> None:
     """Make sure the Emu3.5 src tree is importable."""
 
     def _has_src_module() -> bool:
-        spec = importlib.util.find_spec("src.utils.model_utils")
+        try:
+            spec = importlib.util.find_spec("src.utils.model_utils")
+        except ModuleNotFoundError:
+            return False
         return spec is not None
 
     if _has_src_module():
